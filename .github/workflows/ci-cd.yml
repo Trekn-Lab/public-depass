@@ -1,0 +1,68 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches:
+      - develop
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18.x"
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: create .env
+        run: touch .env
+
+      - name: Generate .env file
+        run: |
+          echo "NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }}" >> .env
+          echo "FE_URL=${{ secrets.FE_URL }}" >> .env
+          echo "TOKEN_API_KEY=${{ secrets.TOKEN_API_KEY }}" >> .env
+
+      - name: Docker build
+        run: |
+          # Build Docker image with a dynamic tag based on the branch
+          TAG=$(if [ "${{ github.ref }}" == "refs/heads/main" ]; then echo "prod"; else echo "stag"; fi)
+          docker build -t chungtu001/c2tx420:trekn-bot-fe-$TAG .
+
+      - name: Push Docker image to Docker Hub
+        if: github.event_name == 'push'
+        run: |
+          TAG=$(if [ "${{ github.ref }}" == "refs/heads/main" ]; then echo "prod"; else echo "stag"; fi)
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          docker push chungtu001/c2tx420:trekn-bot-fe-$TAG
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'trekn-prod' || 'trekn-stag' }}
+
+    steps:
+      - name: Pull Docker image from Docker Hub
+        run: |
+          TAG=$(if [ "${{ github.ref }}" == "refs/heads/main" ]; then echo "prod"; else echo "stag"; fi)
+          sudo docker pull chungtu001/c2tx420:trekn-bot-fe-$TAG
+
+      - name: Stop and remove old container
+        run: sudo docker rm -f trekn-bot-fe || true
+
+      - name: Run Docker container
+        run: |
+          TAG=$(if [ "${{ github.ref }}" == "refs/heads/main" ]; then echo "prod"; else echo "stag"; fi)
+          sudo docker run -d -p 3000:3000 --name trekn-bot-fe chungtu001/c2tx420:trekn-bot-fe-$TAG
